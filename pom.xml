@@ -10,8 +10,24 @@
   <description>Standalone application monitoring and error reporting for Java.</description>
   <url>https://octri.dev</url>
   <licenses>
-    <license><name>MIT</name></license>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
   </licenses>
+  <developers>
+    <developer>
+      <name>Octri</name>
+      <organization>Octri</organization>
+      <organizationUrl>https://octri.dev</organizationUrl>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:https://github.com/octridev/octri-java.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/octridev/octri-java.git</developerConnection>
+    <url>https://github.com/octridev/octri-java</url>
+  </scm>
   <properties>
     <maven.compiler.release>11</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
