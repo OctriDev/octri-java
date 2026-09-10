@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Javadoc comments across the whole public API, so the published
+  documentation artifact carries real content.
+
 ## 1.0.0
 
 First public release.

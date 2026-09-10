@@ -34,17 +34,45 @@ public final class Octri {
     );
     private static volatile Config config;
 
+    /**
+     * Connection settings for one Octri monitoring project.
+     *
+     * <p>Hosted users can copy the URL, token and environment from the
+     * Monitoring connection settings in the dashboard.</p>
+     */
     public static final class Config {
+        /** Base URL of the monitoring backend, stored without a trailing slash. */
         public final String url;
         /** Optional only for open self-hosted ingestion. Hosted Octri requires it. */
         public final String token;
+        /** Dashboard project id that received events and spans are filed under. */
         public final String environment;
+        /** Release this process is running, such as a commit SHA, or null. */
         public final String release;
 
+        /**
+         * Creates settings with no release identifier.
+         *
+         * @param url base URL of the monitoring backend
+         * @param token project ingest token, or null for open self-hosted ingestion
+         * @param environment dashboard project id to file telemetry under
+         */
         public Config(String url, String token, String environment) {
             this(url, token, environment, null);
         }
 
+        /**
+         * Creates settings for one monitoring project.
+         *
+         * <p>Trailing slashes on {@code url} are removed, so {@code https://example.com}
+         * and {@code https://example.com/} behave identically. A null {@code url}
+         * becomes the empty string.</p>
+         *
+         * @param url base URL of the monitoring backend
+         * @param token project ingest token, or null for open self-hosted ingestion
+         * @param environment dashboard project id to file telemetry under
+         * @param release release identifier reported with each event, or null
+         */
         public Config(String url, String token, String environment, String release) {
             this.url = trimTrailingSlash(url);
             this.token = token;
@@ -53,10 +81,26 @@ public final class Octri {
         }
     }
 
+    /**
+     * Identifies one W3C distributed trace, and the span that called into
+     * this process.
+     */
     public static final class TraceContext {
+        /** Hexadecimal id, 32 characters long, shared by every span in the trace. */
         public final String traceId;
+        /**
+         * Hexadecimal id, 16 characters long, of the span that called this process.
+         *
+         * <p>Null when this process started the trace.</p>
+         */
         public final String parentSpanId;
 
+        /**
+         * Creates a context for one trace.
+         *
+         * @param traceId id shared by every span in the trace
+         * @param parentSpanId id of the calling span, or null to start a trace
+         */
         public TraceContext(String traceId, String parentSpanId) {
             this.traceId = traceId;
             this.parentSpanId = parentSpanId;
@@ -65,54 +109,128 @@ public final class Octri {
 
     /** Optional enrichment accepted by {@link #captureEvent(String, EventOptions)}. */
     public static final class EventOptions {
+        /** Creates a set of event options with every field unset. */
+        public EventOptions() {}
+
+        /** When the event happened, as an ISO-8601 string. Defaults to the time of the call. */
         public String timestamp;
+        /** Severity, such as {@code info}, {@code warning} or {@code error}. */
         public String level = "info";
+        /** OpenAPI operation id the event belongs to. */
         public String operationId;
+        /** HTTP method of the request the event describes. */
         public String method;
+        /** Request path the event describes. */
         public String path;
+        /** HTTP status code the request ended with. */
         public Integer statusCode;
+        /** How long the described work took, in milliseconds. */
         public Double latencyMs;
+        /** Retry number, counting from 1 for the first attempt. */
         public Integer attempt;
+        /** Your own correlation id for the request. */
         public String requestId;
+        /** Who the event happened to, such as a map holding an {@code id}. */
         public Map<String, Object> user;
+        /**
+         * Searchable keys and values, such as region or plan.
+         *
+         * <p>Octri sets {@code octri.origin} itself; these are merged over it.</p>
+         */
         public Map<String, Object> tags;
+        /** Free-form detail shown alongside the event in the dashboard. */
         public Map<String, Object> context;
+        /** Steps leading up to the event, oldest first. */
         public List<Map<String, Object>> breadcrumbs;
+        /** Overrides how the dashboard groups this event with similar ones. */
         public String fingerprint;
+        /** Trace the event belongs to, usually from {@link Octri#traceFromHeader(String)}. */
         public TraceContext trace;
+        /** Span within that trace the event was raised in. */
         public String spanId;
+        /**
+         * Idempotency key for the delivery.
+         *
+         * <p>Pass the same value when retrying a send so the backend stores it once.
+         * A value that is null, empty, or carries a carriage return or newline is
+         * replaced with a random id.</p>
+         */
         public String eventId;
     }
 
     /** Optional request and trace metadata for a captured exception. */
     public static final class ErrorOptions {
+        /** Creates a set of error options with every field unset. */
+        public ErrorOptions() {}
+
+        /** Severity, such as {@code error} or {@code fatal}. */
         public String level = "error";
+        /** OpenAPI operation id the failure happened under. */
         public String operationId;
+        /** HTTP method of the request that failed. */
         public String method;
+        /** Request path that failed. */
         public String path;
+        /** HTTP status code the failed request ended with. */
         public Integer statusCode;
+        /**
+         * Trace to file the error under, usually from {@link Octri#traceFromHeader(String)}.
+         *
+         * <p>When null, the error starts a new trace of its own.</p>
+         */
         public TraceContext trace;
     }
 
     /** A completed trace span. Times are ISO-8601 strings. */
     public static final class Span {
+        /** Creates an empty span. Fill in the required fields before capture. */
+        public Span() {}
+
+        /** Id of the trace this span belongs to. Required. */
         public String traceId;
+        /** Id of this span, unique within the trace. Required. */
         public String spanId;
+        /** Id of the enclosing span, or null when this is the root of the trace. */
         public String parentSpanId;
+        /** Readable name for the work, such as {@code orders.list}. Required. */
         public String name;
+        /** Side of the call the span was recorded on. */
         public String service = "server";
+        /** OpenAPI operation id the span belongs to. */
         public String operationId;
+        /** When the work started, as an ISO-8601 string. Required. */
         public String startTime;
+        /** When the work finished, as an ISO-8601 string, or null while it runs. */
         public String endTime;
+        /** How the work ended, such as {@code ok} or {@code error}. */
         public String status = "ok";
     }
 
-    /** Configure Octri once during application startup. */
+    /**
+     * Points every later call at the project described by {@code value}.
+     *
+     * <p>Call this once at startup. Until it runs, the capture methods return
+     * without sending anything. Calling it again replaces the settings used by
+     * subsequent calls.</p>
+     *
+     * @param value the settings to use, or null to stop reporting
+     */
     public static void init(Config value) {
         config = value;
     }
 
-    /** Read a W3C traceparent header or create a fresh trace. */
+    /**
+     * Reads a W3C {@code traceparent} header into a trace context.
+     *
+     * <p>Returns the trace and parent span carried by {@code value} when it is
+     * a well-formed version {@code 00} header. Returns a context holding a
+     * fresh random trace id and no parent when the header is null, malformed,
+     * or carries an all-zero trace or parent id, so the caller always gets a
+     * usable trace.</p>
+     *
+     * @param value the inbound {@code traceparent} header, or null
+     * @return the trace to report under, never null
+     */
     public static TraceContext traceFromHeader(String value) {
         Matcher match = value == null ? null : TRACEPARENT.matcher(value.trim());
         if (match != null && match.matches()
@@ -123,12 +241,24 @@ public final class Octri {
         return new TraceContext(randomHex(16), null);
     }
 
-    /** Log a standalone event without depending on a generated Octri SDK. */
+    /**
+     * Logs a standalone event with no extra detail.
+     *
+     * @param message what happened; ignored when null
+     */
     public static void captureEvent(String message) {
         captureEvent(message, new EventOptions());
     }
 
-    /** Log a standalone event without depending on a generated Octri SDK. */
+    /**
+     * Logs a standalone event, without depending on a generated Octri SDK.
+     *
+     * <p>Returns immediately; the send happens in the background. Does nothing
+     * when {@link #init(Config)} has not run.</p>
+     *
+     * @param message what happened; ignored when null
+     * @param options extra detail to attach, or null for the defaults
+     */
     public static void captureEvent(String message, EventOptions options) {
         Config cfg = config;
         if (cfg == null || message == null) return;
@@ -162,11 +292,30 @@ public final class Octri {
         post(cfg, "/ingest", payload, eventId);
     }
 
+    /**
+     * Reports {@code error} with no request or trace detail.
+     *
+     * <p>The error starts a trace of its own. Returns immediately; the send
+     * happens in the background.</p>
+     *
+     * @param error the exception to report; ignored when null
+     */
     public static void captureError(Throwable error) {
         captureError(error, new ErrorOptions());
     }
 
-    /** Capture an exception with symbolic Java stack frames. */
+    /**
+     * Reports an exception, with one symbolic frame per line of its stack.
+     *
+     * <p>Frames outside {@code java.}, {@code jdk.} and {@code sun.} are marked
+     * as in-app, so the dashboard shows your own code first. Files the error
+     * under the trace in {@code options}, or under a new trace when none is
+     * given. Returns immediately; the send happens in the background. Does
+     * nothing when {@link #init(Config)} has not run.</p>
+     *
+     * @param error the exception to report; ignored when null
+     * @param options request and trace detail, or null for the defaults
+     */
     public static void captureError(Throwable error, ErrorOptions options) {
         Config cfg = config;
         if (cfg == null || error == null) return;
@@ -207,7 +356,15 @@ public final class Octri {
         post(cfg, "/ingest", payload, (String) payload.get("eventId"));
     }
 
-    /** Report a completed distributed-trace span. */
+    /**
+     * Records a finished span as one bar in the dashboard request waterfall.
+     *
+     * <p>Ignores a span whose trace id, span id, name or start time is empty.
+     * Returns immediately; the send happens in the background. Does nothing
+     * when {@link #init(Config)} has not run.</p>
+     *
+     * @param span the finished span to report; ignored when null
+     */
     public static void captureSpan(Span span) {
         Config cfg = config;
         if (cfg == null || span == null
