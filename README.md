@@ -147,19 +147,21 @@ Spans sharing a `traceId` nest by `parentSpanId` in the dashboard waterfall.
 
 ### Monitoring runtimes
 
-[Node](https://github.com/octridev/octri-node) ·
-[Python](https://github.com/octridev/octri-python) ·
-[Go](https://github.com/octridev/octri-go) ·
-[Ruby](https://github.com/octridev/octri-ruby) ·
-[Rust](https://github.com/octridev/octri-rust) ·
-[PHP](https://github.com/octridev/octri-php) ·
-[Java](https://github.com/octridev/octri-java) ·
-[Kotlin](https://github.com/octridev/octri-kotlin) ·
-[Swift](https://github.com/octridev/octri-swift) ·
-[Dart](https://github.com/octridev/octri-dart)
+- [Node](https://github.com/octridev/octri-node)
+- [Python](https://github.com/octridev/octri-python)
+- [Go](https://github.com/octridev/octri-go)
+- [Ruby](https://github.com/octridev/octri-ruby)
+- [Rust](https://github.com/octridev/octri-rust)
+- [PHP](https://github.com/octridev/octri-php)
+- [Java](https://github.com/octridev/octri-java)
+- [Kotlin](https://github.com/octridev/octri-kotlin)
+- [Swift](https://github.com/octridev/octri-swift)
+- [Dart](https://github.com/octridev/octri-dart)
 
-[Documentation](https://docs.octri.dev/docs) ·
-[Pricing](https://octri.dev/pricing) ·
-[Changelog](https://docs.octri.dev/changelog)
+### More
+
+- [Documentation](https://docs.octri.dev/docs)
+- [Pricing](https://octri.dev/pricing)
+- [Changelog](https://docs.octri.dev/changelog)
 
 MIT licensed.
