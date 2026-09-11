@@ -5,14 +5,19 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,6 +30,7 @@ import java.util.regex.Pattern;
 public final class Octri {
     private Octri() {}
 
+    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 256;
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final HttpClient HTTP = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(2))
@@ -33,6 +39,34 @@ public final class Octri {
         "^00-([0-9a-fA-F]{32})-([0-9a-fA-F]{16})-[0-9a-fA-F]{2}$"
     );
     private static volatile Config config;
+
+    /**
+     * Keys whose value never leaves the process. Compared against the key with
+     * case and separators removed, so {@code api_key}, {@code apiKey} and
+     * {@code API-KEY} all match {@code apikey}, and the test is a substring one,
+     * so {@code stripeSecretKey} matches too.
+     */
+    private static final List<String> SCRUB_KEYS = Collections.unmodifiableList(Arrays.asList(
+        "password", "passwd", "passphrase", "secret", "token", "apikey",
+        "authorization", "credential", "cookie", "session", "privatekey",
+        "accesskey", "cardnumber", "creditcard", "cvv", "ssn"));
+
+    private static final String REDACTED = "[redacted]";
+    private static final String TRUNCATED = "[truncated]";
+
+    /** Deep enough for real context maps, shallow enough to stay cheap. */
+    private static final int MAX_SCRUB_DEPTH = 8;
+
+    private static final Pattern BEARER =
+        Pattern.compile("\\bbearer\\s+[\\w.~+/-]+=*", Pattern.CASE_INSENSITIVE);
+    private static final Pattern JWT = Pattern.compile("\\beyJ[\\w-]+\\.[\\w-]+\\.[\\w-]+");
+    private static final Pattern DIGIT_RUN = Pattern.compile("\\b(?:\\d[ -]?){12,18}\\d\\b");
+    private static final Pattern EMAIL = Pattern.compile("[\\w.%+-]+@[\\w-]+(?:\\.[\\w-]+)+");
+    private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^a-z0-9]");
+
+    private static final List<String> EXTRA_SCRUB_KEYS = new CopyOnWriteArrayList<>();
+
+    private static volatile Function<Map<String, Object>, Map<String, Object>> beforeSend;
 
     /**
      * Connection settings for one Octri monitoring project.
@@ -384,17 +418,179 @@ public final class Octri {
         post(cfg, "/traces", payload, span.traceId + ":" + span.spanId);
     }
 
+    /**
+     * Redacts more key names, on top of the built-in list. Matching ignores case
+     * and separators and is a substring test, so {@code account} also covers
+     * {@code accountNumber}.
+     *
+     * <pre>Octri.addScrubFields("accountNumber", "otp");</pre>
+     */
+    public static void addScrubFields(String... fields) {
+        for (String field : fields) {
+            String key = normalizeKey(field);
+            if (!key.isEmpty() && !EXTRA_SCRUB_KEYS.contains(key)) {
+                EXTRA_SCRUB_KEYS.add(key);
+            }
+        }
+    }
+
+    /**
+     * Runs a hook on every payload just before it is sent. Return the payload
+     * (editing it is fine) to send it, or {@code null} to drop the event:
+     *
+     * <pre>Octri.setBeforeSend(payload -&gt; "/health".equals(payload.get("path")) ? null : payload);</pre>
+     *
+     * <p>Redaction still runs afterwards, so a hook cannot leak a credential by
+     * accident. Pass {@code null} to remove the hook.
+     */
+    public static void setBeforeSend(Function<Map<String, Object>, Map<String, Object>> hook) {
+        beforeSend = hook;
+    }
+
+    private static String normalizeKey(String key) {
+        if (key == null) {
+            return "";
+        }
+        return NON_ALPHANUMERIC.matcher(key.toLowerCase(Locale.ROOT)).replaceAll("");
+    }
+
+    private static boolean isSecretKey(Object key) {
+        String normalized = normalizeKey(String.valueOf(key));
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        for (String candidate : SCRUB_KEYS) {
+            if (normalized.contains(candidate)) {
+                return true;
+            }
+        }
+        for (String candidate : EXTRA_SCRUB_KEYS) {
+            if (normalized.contains(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Tells a card number from the order ids and timestamps that look like one. */
+    private static boolean passesLuhn(String digits) {
+        int sum = 0;
+        boolean doubling = false;
+        for (int index = digits.length() - 1; index >= 0; index--) {
+            int digit = digits.charAt(index) - '0';
+            if (doubling) {
+                digit *= 2;
+                if (digit > 9) {
+                    digit -= 9;
+                }
+            }
+            sum += digit;
+            doubling = !doubling;
+        }
+        return sum % 10 == 0;
+    }
+
+    /** Removes credentials and personal data that leaked into free text. */
+    private static String scrubText(String value) {
+        if (value.isEmpty()) {
+            return value;
+        }
+        String scrubbed = BEARER.matcher(value).replaceAll(Matcher.quoteReplacement(REDACTED));
+        scrubbed = JWT.matcher(scrubbed).replaceAll(Matcher.quoteReplacement(REDACTED));
+
+        Matcher runs = DIGIT_RUN.matcher(scrubbed);
+        StringBuffer withoutCards = new StringBuffer();
+        while (runs.find()) {
+            String run = runs.group();
+            String digits = run.replaceAll("\\D", "");
+            runs.appendReplacement(
+                withoutCards, Matcher.quoteReplacement(passesLuhn(digits) ? REDACTED : run));
+        }
+        runs.appendTail(withoutCards);
+
+        return EMAIL.matcher(withoutCards.toString()).replaceAll(Matcher.quoteReplacement(REDACTED));
+    }
+
+    /**
+     * Redacts credential-shaped keys anywhere in the payload, and strips secrets
+     * out of the free text around them. {@code user} is the field you
+     * deliberately fill with an identity, so its strings are left alone; its
+     * keys are still checked.
+     */
+    private static Object scrubValue(Object value, int depth, boolean text) {
+        if (value instanceof String) {
+            return text ? scrubText((String) value) : value;
+        }
+        if (value instanceof Map) {
+            if (depth >= MAX_SCRUB_DEPTH) {
+                return TRUNCATED;
+            }
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                out.put(key, isSecretKey(key)
+                    ? REDACTED
+                    : scrubValue(entry.getValue(), depth + 1, text && !"user".equals(key)));
+            }
+            return out;
+        }
+        if (value instanceof Iterable) {
+            if (depth >= MAX_SCRUB_DEPTH) {
+                return TRUNCATED;
+            }
+            List<Object> out = new ArrayList<>();
+            for (Object item : (Iterable<?>) value) {
+                out.add(scrubValue(item, depth + 1, text));
+            }
+            return out;
+        }
+        if (value != null && value.getClass().isArray()) {
+            if (depth >= MAX_SCRUB_DEPTH) {
+                return TRUNCATED;
+            }
+            int length = Array.getLength(value);
+            List<Object> out = new ArrayList<>(length);
+            for (int index = 0; index < length; index++) {
+                out.add(scrubValue(Array.get(value, index), depth + 1, text));
+            }
+            return out;
+        }
+        return value;
+    }
+
+    /**
+     * The last thing every payload passes through. Both the hook and the
+     * redaction live here rather than in the capture methods, so nothing can be
+     * reported around them.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> scrubPayload(Map<String, Object> payload) {
+        Function<Map<String, Object>, Map<String, Object>> hook = beforeSend;
+        Map<String, Object> hooked = payload;
+        if (hook != null) {
+            hooked = hook.apply(payload);
+            if (hooked == null) {
+                return null;
+            }
+        }
+        return (Map<String, Object>) scrubValue(hooked, 0, true);
+    }
+
     private static void post(Config cfg, String path, Map<String, Object> payload, String idempotencyKey) {
         try {
-            if (!safeHeaderValue(idempotencyKey)
+            if (!safeIdempotencyKey(idempotencyKey)
                 || (cfg.token != null && !cfg.token.isEmpty() && !safeHeaderValue(cfg.token))) {
+                return;
+            }
+            Map<String, Object> scrubbed = scrubPayload(payload);
+            if (scrubbed == null) {
                 return;
             }
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(cfg.url + path))
                 .timeout(Duration.ofSeconds(5))
                 .header("content-type", "application/json")
                 .header("idempotency-key", idempotencyKey)
-                .POST(HttpRequest.BodyPublishers.ofString(toJson(payload)))
+                .POST(HttpRequest.BodyPublishers.ofString(toJson(scrubbed)))
                 ;
             if (cfg.token != null && !cfg.token.isEmpty()) {
                 builder.header("authorization", "Bearer " + cfg.token);
@@ -427,7 +623,16 @@ public final class Octri {
     }
 
     private static String safeEventId(String value) {
-        return safeHeaderValue(value) ? value : randomHex(16);
+        return safeIdempotencyKey(value) ? value : randomHex(16);
+    }
+
+    /**
+     * A caller-supplied event id becomes the idempotency-key header, so it is
+     * bounded as well as newline-free.
+     */
+    private static boolean safeIdempotencyKey(String value) {
+        return safeHeaderValue(value)
+            && value.getBytes(StandardCharsets.UTF_8).length <= MAX_IDEMPOTENCY_KEY_LENGTH;
     }
 
     private static boolean safeHeaderValue(String value) {

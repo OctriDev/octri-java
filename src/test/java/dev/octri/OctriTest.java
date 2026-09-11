@@ -43,6 +43,32 @@ final class OctriTest {
     }
 
     @Test
+    void replacesAnOversizedEventId() throws Exception {
+        CountDownLatch received = new CountDownLatch(1);
+        AtomicReference<String> idempotencyKey = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/ingest", exchange -> {
+            idempotencyKey.set(exchange.getRequestHeaders().getFirst("idempotency-key"));
+            exchange.sendResponseHeaders(202, -1);
+            exchange.close();
+            received.countDown();
+        });
+        server.start();
+
+        Octri.init(new Octri.Config(
+            "http://127.0.0.1:" + server.getAddress().getPort() + "/",
+            "project-token",
+            "project-1"
+        ));
+        Octri.EventOptions options = new Octri.EventOptions();
+        options.eventId = "e".repeat(257);
+        Octri.captureEvent("checkout.completed", options);
+
+        assertTrue(received.await(3, TimeUnit.SECONDS));
+        assertTrue(idempotencyKey.get().matches("[0-9a-f]{32}"));
+    }
+
+    @Test
     void sendsScopedIdempotentJsonWithoutHeaderInjection() throws Exception {
         CountDownLatch received = new CountDownLatch(1);
         AtomicReference<String> body = new AtomicReference<>();
