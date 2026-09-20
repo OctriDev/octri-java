@@ -159,20 +159,33 @@ final class ScrubTest {
 
     // ── The user field ──────────────────────────────────────────────────────
 
+    // The identity the dashboard keys on is "id", which survives. Direct
+    // identifiers under the user are redacted like they are in every generated SDK.
     @Test
-    void keepsUserIdentityButNotUserCredentials() throws Exception {
+    void keepsUserIdButNotUserCredentialsOrIdentifiers() throws Exception {
         Map<String, Object> user = new LinkedHashMap<>();
         user.put("id", "u_1");
         user.put("email", "ada@example.com");
         user.put("sessionToken", "st_1");
+        user.put("customerPhone", "+1 555 0100");
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("billingAddress", "1 High St");
+        context.put("avatarUrl", "https://cdn.example.com/a.png");
+        context.put("queryTimeMs", 12);
 
         Octri.EventOptions options = new Octri.EventOptions();
         options.user = user;
+        options.context = context;
         Octri.captureEvent("profile update failed", options);
 
         String body = next();
-        assertTrue(body.contains("\"email\":\"ada@example.com\""), body);
+        assertTrue(body.contains("\"id\":\"u_1\""), body);
+        assertTrue(body.contains("\"email\":\"[redacted]\""), body);
         assertTrue(body.contains("\"sessionToken\":\"[redacted]\""), body);
+        assertTrue(body.contains("\"customerPhone\":\"[redacted]\""), body);
+        assertTrue(body.contains("\"billingAddress\":\"[redacted]\""), body);
+        assertTrue(body.contains("\"avatarUrl\":\"https://cdn.example.com/a.png\""), body);
+        assertTrue(body.contains("\"queryTimeMs\":12"), body);
     }
 
     // ── setBeforeSend ───────────────────────────────────────────────────────
