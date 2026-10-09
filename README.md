@@ -48,6 +48,11 @@ Hosted users copy the project-scoped URL, token, and environment from the
 Monitoring connection settings in the dashboard. Pass `null` for the token only
 when you point at an open self-hosted ingest endpoint.
 
+Enable Monitoring for this project in the dashboard (or its API) before
+deploying. Enabling it creates or rotates the project ingest token; events are
+rejected while Monitoring is off. This SDK configures local reporting only and
+cannot enable Monitoring for a project.
+
 Every call is asynchronous, best effort, and carries an idempotency key.
 Transport failures are swallowed, so a monitoring outage cannot affect the
 service it is watching.
@@ -151,9 +156,14 @@ anything else you send as a string. Bearer tokens, JWTs, card numbers and email
 addresses come out as `[redacted]`. A card number has to pass the Luhn check
 first, so an order number or a timestamp survives.
 
-`user` is the exception. It is the field you fill with an identity on purpose,
-so `user.email` is reported exactly as you set it. Credential-shaped keys inside
-it are still redacted.
+`user.id` is retained so the dashboard can count affected users. Direct
+identifier keys in `user`, including `email`, `phone`, `address`, `userAgent`,
+and `ipAddress`, are replaced with `[redacted]` before sending. Other strings
+inside `user` are not scanned as free text, so do not put personal data there.
+
+Redaction is not consent management. This SDK does not collect or record
+end-user consent; call capture methods only after your application decides it
+may send data. Use the hook below to remove fields or drop events.
 
 Add your own key names:
 
